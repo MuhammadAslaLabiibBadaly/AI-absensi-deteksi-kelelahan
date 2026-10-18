@@ -4,8 +4,17 @@ import cv2
 import numpy as np
 import httpx
 from fastapi import FastAPI, File, UploadFile, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI(title="AI Attendance & Drowsiness Engine")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 LARAVEL_API_URL = "http://127.0.0.1:8000/api/internal/attendance-log"
 
@@ -44,18 +53,27 @@ async def detect_drowsiness(background_tasks: BackgroundTasks, file: UploadFile 
             return {"status": "ERROR", "message": "Frame gambar tidak valid"}
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
+        
+        # Optimasi Equalize Hist untuk memperjelas kontras mata di pencahayaan redup
+        gray = cv2.equalizeHist(gray)
+
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(30, 30))
         
         if len(faces) == 0:
             return {"status": "NO_FACE_DETECTED", "message": "Wajah tidak terdeteksi di kamera"}
 
         (x, y, w, h) = faces[0]
-        roi_gray = gray[y:y+h, x:x+w]
         
-        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=5, minSize=(15, 15))
+        # Ambil ROI (Region of Interest) hanya separuh atas wajah untuk pencarian mata
+        roi_gray = gray[y:y+int(h*0.6), x:x+w]
+        
+        # Buat minNeighbors lebih toleran (3) agar deteksi mata lebih peka
+        eyes = eye_cascade.detectMultiScale(roi_gray, scaleFactor=1.1, minNeighbors=3, minSize=(10, 10))
         
         total_eyes_detected = int(len(eyes))
-        is_fatigue = bool(total_eyes_detected < 2)
+        
+        # LOGIKA PERBAIKAN: Jika terdeteksi minimal 1 mata, pengguna dianggap FIT
+        is_fatigue = bool(total_eyes_detected < 1)
         recommendation = "WARNING_FATIGUE" if is_fatigue else "FIT_FOR_WORK"
 
         # Data yang akan dikirim ke Laravel API
