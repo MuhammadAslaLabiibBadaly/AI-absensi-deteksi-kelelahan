@@ -1,6 +1,34 @@
 <script setup>
 import { ref, onMounted, onUnmounted } from 'vue';
 import { router } from '@inertiajs/vue3';
+import FatigueTrendChart from '@/Components/FatigueTrendChart.vue';
+
+// Fungsi untuk membunyikan suara Beep Peringatan (Web Audio API)
+const playWarningSound = () => {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    
+    // Buat 2 kali bunyi Beep (Beep-Beep)
+    [0, 0.25].forEach((delay) => {
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+
+      oscillator.type = 'sawtooth'; // Nada tajam untuk peringatan
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime + delay); // Frekuensi A5
+
+      gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime + delay);
+      gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + delay + 0.15);
+
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+
+      oscillator.start(audioCtx.currentTime + delay);
+      oscillator.stop(audioCtx.currentTime + delay + 0.15);
+    });
+  } catch (e) {
+    console.error('Gagal memutar suara alert:', e);
+  }
+};
 
 defineProps({
   logs: Array,
@@ -81,10 +109,8 @@ const captureAndSend = () => {
   canvas.width = video.videoWidth || 640;
   canvas.height = video.videoHeight || 480;
 
-  // Gambar frame video saat ini ke canvas
   context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  // Ubah ke Blob image JPEG
   canvas.toBlob(async (blob) => {
     if (!blob) return;
 
@@ -93,15 +119,21 @@ const captureAndSend = () => {
 
     try {
       captureStatus.value = 'Mengirim frame ke AI Engine...';
-      // Kirim HTTP POST ke FastAPI (Port 8001)
       const response = await fetch('http://127.0.0.1:8001/api/v1/detect-drowsiness', {
         method: 'POST',
         body: formData,
       });
 
       if (response.ok) {
+        const result = await response.json();
         captureStatus.value = 'Analisis sukses!';
-        // Refresh data props Inertia secara halus tanpa reload halaman
+
+        // JIKA TERDETEKSI KANTUK / LELAH, BUNYIKAN SUARA ALERT!
+        if (result.recommendation === 'WARNING_FATIGUE' || result.metrics?.is_fatigue) {
+          playWarningSound();
+        }
+
+        // Refresh data di tabel & chart
         router.reload({ only: ['logs', 'stats'] });
       } else {
         captureStatus.value = 'FastAPI Error: ' + response.statusText;
@@ -120,12 +152,26 @@ const captureAndSend = () => {
       <!-- Header -->
       <div class="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm">
         <div>
-          <h1 class="text-2xl font-bold text-slate-800">AI Attendance & Drowsiness Dashboard</h1>
+          <h1 class="text-2xl font-bold text-slate-800">AI Presensi dan Deteksi Kelelahan</h1>
           <p class="text-slate-500 text-sm">Monitoring presensi dan deteksi tingkat kelelahan real-time</p>
         </div>
-        <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
-          ● System Live
-        </span>
+        <div class="flex items-center gap-3">
+          <!-- Tombol Ekspor CSV/Excel -->
+          <a 
+            href="/export/csv" 
+            target="_blank"
+            class="inline-flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-sm rounded-lg shadow-sm transition"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1.172 1.172 0 01.828.293l5.414 5.414a1.172 1.172 0 01.293.828V19a2 2 0 01-2 2z" />
+            </svg>
+            Ekspor Laporan (Excel/CSV)
+          </a>
+
+          <span class="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-800">
+            ● System Live
+          </span>
+        </div>
       </div>
 
       <!-- Live Webcam & Stats Grid -->
@@ -167,21 +213,31 @@ const captureAndSend = () => {
         </div>
 
         <!-- Stats Cards -->
-        <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
-          <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-indigo-500">
-            <p class="text-xs font-semibold text-slate-400 uppercase">Total Presensi</p>
-            <p class="text-3xl font-bold text-slate-800 mt-1">{{ stats.total }}</p>
+        <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6 items-start"> 
+          <div class="lg:col-span-2 grid grid-cols-1 md:grid-cols-3 gap-6 items-start">
+            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-indigo-500">
+              <p class="text-xs font-semibold text-slate-400 uppercase">Total Presensi</p>
+              <p class="text-3xl font-bold text-slate-800 mt-1">{{ stats.total }}</p>
+            </div>
+            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-emerald-500">
+              <p class="text-xs font-semibold text-slate-400 uppercase">Karyawan Fit</p>
+              <p class="text-3xl font-bold text-emerald-600 mt-1">{{ stats.fit }}</p>
+            </div>
+            <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-rose-500">
+              <p class="text-xs font-semibold text-slate-400 uppercase">Terdeteksi Lelah</p>
+              <p class="text-3xl font-bold text-rose-600 mt-1">{{ stats.fatigue }}</p>
+            </div>
           </div>
-          <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-emerald-500">
-            <p class="text-xs font-semibold text-slate-400 uppercase">Karyawan Fit</p>
-            <p class="text-3xl font-bold text-emerald-600 mt-1">{{ stats.fit }}</p>
-          </div>
-          <div class="bg-white p-6 rounded-xl shadow-sm border-l-4 border-rose-500">
-            <p class="text-xs font-semibold text-slate-400 uppercase">Terdeteksi Lelah</p>
-            <p class="text-3xl font-bold text-rose-600 mt-1">{{ stats.fatigue }}</p>
+
+          <div class="lg:col-span-3 bg-white p-6 rounded-xl shadow-sm">
+            <div class="bg-white p-6 rounded-xl shadow-sm space-y-4">
+              <div class="flex justify-between items-center border-b border-slate-100 pb-3">
+                <h2 class="text-lg font-bold text-slate-800">Tren Kebugaran (10 Scan Terakhir)</h2>
+              </div>
+              <FatigueTrendChart :logs="logs" />
+            </div>
           </div>
         </div>
-
       </div>
 
       <!-- Log Table -->
